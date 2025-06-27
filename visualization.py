@@ -76,6 +76,23 @@ def evaluate_and_visualize(agents, map_graph:Graph, algorithm_name, evaluation_s
             if result is not None:
                 # 到达节点，重置该节点idleness
                 node_idleness[result] = 0
+
+                # 添加与训练循环一致的逻辑以防止停顿
+                # 1. 获取在新节点上的状态
+                current_state = agent.get_state(node_idleness)
+                
+                # 2. 根据学习到的策略选择下一个动作
+                next_action = agent.select_action(current_state)
+                
+                # 3. 准备立即移动
+                edge_weight = agent.map.get_edge_length(agent.position, next_action)
+                agent.on_edge = True
+                agent.edge_time_left = int(edge_weight) if edge_weight is not None else 0
+                agent.target_node = next_action
+                
+                # 4. 保持智能体状态更新的一致性
+                agent.last_state = current_state
+                agent.last_action = next_action
     
     # 绘制Average Idleness图
     plt.figure(figsize=(12, 5))

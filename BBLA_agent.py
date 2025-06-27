@@ -9,7 +9,7 @@ class BBLA_agent:
         self.map = map
         self.Q_table = dict()
         self.visit_count = dict() # is used to achieve decreasing alpha
-        self.last_state = (0,0,0,0) # last_node=0 implies the agent is in initial state  
+        self.last_state: tuple[int, int, int, int] = (0,0,0,0) # last_node=0 implies the agent is in initial state  
         self.last_action = int()
         self.gamma = gamma
         self.epsilon = epsilon
@@ -25,19 +25,36 @@ class BBLA_agent:
         neighbors = [n for n, _ in self.map.adj_list[self.position]]
         neighbor_Idleness = [node_Idleness[n] for n in neighbors]
         max_idle = max(neighbor_Idleness) if neighbor_Idleness else 0
+        max_nodes = [n for n, q in zip(neighbors, neighbor_Idleness) if q == max_idle]
+        max_node = random.choice(max_nodes)
         min_idle = min(neighbor_Idleness) if neighbor_Idleness else 0
-        return (self.position, self.last_state[0], max_idle, min_idle)
+        min_nodes = [n for n, q in zip(neighbors, neighbor_Idleness) if q == min_idle]
+        min_node = random.choice(min_nodes)
+        return (self.position, self.last_state[0], max_node, min_node)
 
     def update_Q(self, state, action:int, reward, next_state):
         self.visit_count[(state,action)] = self.visit_count.get((state,action), 0) + 1
         alpha = 1 / (2 + self.visit_count[(state,action)]/15) 
         last_Q = self.Q_table.get((state, action), 0)
+        
+        # adjust the discounted factor according to edge length
+        edge_weight = self.map.get_edge_length(state[0], action)
+        # for n, w in self.map.adj_list[state[0]]:
+        #     if n == action:
+        #         edge_weight = w
+        #         break
+        
+        if not edge_weight == 0:
+            discount_factor = self.gamma ** edge_weight
+        else:
+            discount_factor = self.gamma
+            
         # get the max Q value of next state
         next_neighbors = [n for n, _ in self.map.adj_list[action]]
         next_Qs = [self.Q_table.get((next_state, n), 0) for n in next_neighbors]
         max_next_Q = max(next_Qs) if next_Qs else 0
         # update Q value
-        new_Q = last_Q + alpha * (reward + self.gamma * max_next_Q - last_Q)
+        new_Q = last_Q + alpha * (reward + discount_factor * max_next_Q - last_Q)
         self.Q_table[(state, action)] = new_Q
     
     def select_action(self, state):
@@ -62,11 +79,11 @@ class BBLA_agent:
             state = self.get_state(node_Idleness)
             action = self.select_action(state)
 
-            edge_weight = None
-            for n, w in self.map.adj_list[self.position]:
-                if n == action:
-                    edge_weight = w
-                    break
+            edge_weight = self.map.get_edge_length(self.position, action)
+            # for n, w in self.map.adj_list[self.position]:
+            #     if n == action:
+            #         edge_weight = w
+            #         break
             self.on_edge = True
             self.edge_time_left = int(edge_weight) if edge_weight is not None else 0
             self.target_node = action
@@ -119,11 +136,23 @@ def main():
             for agent in BBLAagents:
                 result = agent.step(node_Idleness)
                 if result is not None:
+                    # reach a node
                     reward = node_Idleness[result]
                     node_Idleness[result] = 0
-                    next_state = agent.get_state(node_Idleness)
-                    agent.update_Q(agent.last_state, agent.last_action, reward, next_state)
-            
+                    current_state = agent.get_state(node_Idleness)
+                    agent.update_Q(agent.last_state, agent.last_action, reward, current_state)
+                    
+                    # choose target-node and move onto the edge immediately
+                    next_action = agent.select_action(current_state)
+                    edge_weight = agent.map.get_edge_length(agent.position, next_action)
+                    
+                    agent.on_edge = True
+                    agent.edge_time_left = int(edge_weight) if edge_weight is not None else 0
+                    agent.target_node = next_action
+                    
+                    agent.last_state = current_state
+                    agent.last_action = next_action
+
             # calculate the Instantaneous Graph Idleness of current time-step
             current_graph_idleness = sum(node_Idleness.values()) / len(node_Idleness)
             total_Idleness += current_graph_idleness

@@ -8,6 +8,15 @@ class Graph:
     def __init__(self, path:str):
         self.nodes, self.adj_list, self.phi = load_graph(path)
     
+    def get_edge_length(self, node1, node2):
+        """
+        if there's no edge between node1 and node2, return 0
+        """
+        length = int()
+        for neighbor, weight in self.adj_list[node1]:
+            if neighbor == node2: length = weight
+        return length
+
     # 后续还可以再扩展一些处理图的函数
 
 def load_graph(path: str):
