@@ -1,4 +1,5 @@
 import random
+import matplotlib.pyplot as plt
 from utils.graph_utils import Graph
 
 class BBLA_agent:
@@ -41,7 +42,7 @@ class BBLA_agent:
     
     def select_action(self, state):
         neighbors = [n for n, _ in self.map.adj_list[self.position]]
-        # ¦Å-greedy
+        # Îµ-greedy
         if random.random() < self.epsilon:
             return random.choice(neighbors)
         else:
@@ -84,17 +85,21 @@ class BBLA_agent:
                 return self.position
             else:
                 return None
-    
+
 def main():
-    Map_1 = Graph('graphs/graph_topology.json')
+    Map_1 = Graph('graphs/simple_8nodes.json')
     agent_num = 3
-    episode_num = 20000
-    episode_len = 300
+    episode_num = 10000  
+    episode_len = 600 # quantity of time-step in one episode
     # initialize positions of the agents randomly
     init_positions = random.sample(Map_1.nodes, agent_num)
     BBLAagents = [BBLA_agent(i, pos, Map_1) for i, pos in enumerate(init_positions)]
     # initialize node idleness
     node_Idleness = {n: 0 for n in Map_1.nodes}
+    
+    # record the normalized average idleness of each episode
+    episode_idleness = []
+    
     # train
     for i in range(episode_num):
         # re-initialize positions of the agents in every episode
@@ -106,6 +111,8 @@ def main():
             agent.edge_time_left = 0
             agent.target_node = int()
         node_Idleness = {n: 0 for n in Map_1.nodes}
+        total_Idleness = 0
+        
         for step in range(episode_len):
             for n in node_Idleness:
                 node_Idleness[n] += 1
@@ -116,10 +123,39 @@ def main():
                     node_Idleness[result] = 0
                     next_state = agent.get_state(node_Idleness)
                     agent.update_Q(agent.last_state, agent.last_action, reward, next_state)
-
-                
-
-
-
-
+            
+            # calculate the Instantaneous Graph Idleness of current time-step
+            current_graph_idleness = sum(node_Idleness.values()) / len(node_Idleness)
+            total_Idleness += current_graph_idleness
         
+        # calculate the Average Idleness of current episode
+        episode_avg_idleness = total_Idleness / episode_len
+        
+        # normalize
+        normalized_avg_idleness = episode_avg_idleness * (agent_num / len(Map_1.nodes))
+        episode_idleness.append(normalized_avg_idleness)
+        
+        if (i + 1) % 100 == 0:
+            print(f"Episode {i+1}/{episode_num}, Normalized Avg Idleness: {normalized_avg_idleness:.2f}")
+    
+    # traning plot
+    plt.figure(figsize=(10, 6))
+    plt.plot(range(1, episode_num + 1), episode_idleness, 'b-', linewidth=1)
+    plt.xlabel('Episode')
+    plt.ylabel('Normalized Average Idleness')
+    plt.title('BBLA Training Progress')
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig('BBLA_training_curve.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    
+    print(f"Training completed! Final normalized average idleness: {episode_idleness[-1]:.2f}")
+    print("Training curve saved as 'BBLA_training_curve.png'")
+    
+    # evaluation and visualization
+    print("\nStarting evaluation and visualization...")
+    from visualization import evaluate_and_visualize
+    evaluate_and_visualize(BBLAagents, Map_1, algorithm_name="BBLA", evaluation_steps=600)
+
+if __name__ == "__main__":
+    main()
