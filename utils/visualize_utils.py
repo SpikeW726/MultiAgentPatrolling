@@ -3,91 +3,21 @@ import matplotlib.animation as animation
 import numpy as np
 import os
 from utils.graph_utils import Graph
+from typing import Dict, List
+from matplotlib.colors import to_rgb
+from utils.nx_layout import create_nx_layout # 导入新的布局函数
 
 
-def evaluate_and_visualize(agents, map_graph:Graph, algorithm_name, map_name, evaluation_steps=500):
+def plot_idleness_charts(avg_idleness_history, worst_idleness_history, algorithm_name, map_name):
     """
-    运行训练好的agents并生成可视化
+    根据传入的idleness历史数据绘制折线图
     Args:
-        agents: 训练好的agent列表
-        map_graph: 地图图结构
-        algorithm_name: 算法名称，用于文件名和标题
-        map_name: 地图名称，用于文件名和标题
-        evaluation_steps: 评估步数
+        avg_idleness_history (list): 每一步的平均空闲度历史
+        worst_idleness_history (list): 每一步的最差空闲度历史
+        algorithm_name (str): 算法名称
+        map_name (str): 地图名称
     """
-    # 初始化
-    node_idleness = {n: 0 for n in map_graph.nodes}
-    normalization = len(agents) / len(map_graph.nodes)
-    
-    # 记录数据
-    graph_idleness_history = [] # record the Graph-Idleness(node average Node-Idleness) of each time-step
-    avg_idleness_history = [] # record the Average-Idleness(time average Graph-Idleness) of each time-step
-    worst_idleness_history = [] # record the max Node-Idleness of each time-step
-    
-    # 为动画准备数据 - 增加子步数实现连续运动
-    agent_positions_history = []
-    sub_steps_per_step = 3  # 减少到3个子步，提高速度
-    
-    print(f"Starting {algorithm_name} evaluation...")
-    
-    for step in range(evaluation_steps):
-        # 更新所有节点idleness
-        for n in node_idleness:
-            node_idleness[n] += 1
-            
-        # 记录当前step的idleness
-        current_graph_idleness = sum(node_idleness.values()) * normalization / len(node_idleness)
-        graph_idleness_history.append(current_graph_idleness)
-        current_avg_idleness = sum(graph_idleness_history) / (step+1)
-        avg_idleness_history.append(current_avg_idleness)
-        current_worst_idleness = max(node_idleness.values()) * normalization
-        worst_idleness_history.append(current_worst_idleness)
-        
-        # 记录当前agent位置（用于动画）- 连续运动
-        for sub_step in range(sub_steps_per_step):
-            current_positions = {}
-            for agent in agents:
-                if agent.on_edge:
-                    # 在边上，计算插值位置 - 连续运动
-                    # 获取边的总时间（边权）
-                    edge_weight = None
-                    for n, w in agent.map.adj_list[agent.position]:
-                        if n == agent.target_node:
-                            edge_weight = w
-                            break
-                    
-                    if edge_weight is not None and edge_weight > 0:
-                        # 计算当前时间步的进度
-                        step_progress = (edge_weight - agent.edge_time_left) / edge_weight
-                        # 添加子步的进度
-                        sub_progress = sub_step / sub_steps_per_step
-                        # 总进度
-                        total_progress = step_progress + sub_progress / edge_weight
-                        total_progress = min(total_progress, 1.0)  # 确保不超过1
-                    else:
-                        total_progress = 1.0
-                    current_positions[agent.agent_id] = (agent.position, agent.target_node, total_progress)
-                else:
-                    # 在节点上
-                    current_positions[agent.agent_id] = (agent.position, agent.position, 1.0)
-            agent_positions_history.append(current_positions)
-        
-        # 每个agent行动 - 正确调用step方法
-        for agent in agents:
-            result = agent.step(node_idleness)
-            if result is not None:
-                # 到达节点，重置该节点idleness
-                node_idleness[result] = 0
-                # 立即进行下一步移动
-                current_state = agent.get_state(node_idleness)
-                next_action = agent.select_action(current_state)
-                edge_weight = agent.map.get_edge_length(agent.position, next_action)
-                agent.on_edge = True
-                agent.edge_time_left = int(edge_weight) if edge_weight is not None else 0
-                agent.target_node = next_action
-                agent.last_state = current_state
-                agent.last_action = next_action
-    
+    evaluation_steps = len(avg_idleness_history)
     # 绘制Average Idleness图
     plt.figure(figsize=(12, 5))
     plt.subplot(1, 2, 1)
@@ -110,30 +40,34 @@ def evaluate_and_visualize(agents, map_graph:Graph, algorithm_name, map_name, ev
     os.makedirs(folder_name, exist_ok=True)
     idleness_filename = os.path.join(folder_name, f"{algorithm_name}_idleness_eval_{map_name}.png")
     plt.savefig(idleness_filename, dpi=300, bbox_inches='tight')
-    # plt.show()
+    plt.close() # 关闭图像，防止与动画窗口重叠
     
-    print(f"{algorithm_name} evaluation completed! Final average idleness: {avg_idleness_history[-1]:.2f}")
-    print(f"Final worst idleness: {max(worst_idleness_history):.2f}")
     print(f"Idleness plots saved as '{idleness_filename}'")
-    
-    create_animation(map_graph, agent_positions_history, evaluation_steps * sub_steps_per_step, algorithm_name, map_name)
 
-def create_animation(map_graph, agent_positions_history, total_steps, algorithm_name, map_name):
+
+def create_animation(map_graph, agent_positions_history, total_frames, algorithm_name, map_name):
     """
     创建agent移动的动画视频
     Args:
         map_graph: 地图图结构
         agent_positions_history: agent位置历史记录
-        total_steps: 总步数
+        total_frames: 总步数
         algorithm_name: 算法名称，用于文件名和标题
         map_name: 地图名称，用于文件名和标题
     """
-    # 创建图形
-    fig, ax = plt.subplots(figsize=(10, 8))
+    print("Starting animation...")
     
-    # 绘制地图 - 使用混合布局，平衡美观和真实性
-    # node_positions = create_balanced_layout(map_graph)
-    node_positions = create_circular_layout(map_graph)
+    num_nodes = len(map_graph.nodes)
+    # Scale figure size based on number of nodes to prevent crowding
+    figure_scale_factor = 1.0 + num_nodes / 30.0
+
+    # 创建图形
+    fig, ax = plt.subplots(figsize=(10 * figure_scale_factor, 8 * figure_scale_factor))
+    
+    # 绘制地图 - 使用 networkx 的专业布局算法
+    node_positions = create_nx_layout(map_graph)
+    # node_positions = create_balanced_layout(map_graph) # 注释掉旧的布局函数
+    # node_positions = create_circular_layout(map_graph)
     # node_positions = create_improved_layout(map_graph)
     
     # 绘制边（先绘制，在底层）
@@ -156,7 +90,7 @@ def create_animation(map_graph, agent_positions_history, total_steps, algorithm_
         if weight is not None:
             ax.text(label_x, label_y, str(weight), ha='center', va='center',   # type: ignore
                    fontsize=10, fontweight='normal', bbox=dict(boxstyle="round,pad=0.3", 
-                   facecolor='lightgrey', alpha=0.7, edgecolor='none'))
+                   facecolor='yellow', alpha=0.8, edgecolor='black', linewidth=0.5))
     
     # 设置图形范围 - 根据实际节点位置动态调整
     x_coords = [pos[0] for pos in node_positions.values()]
@@ -179,17 +113,27 @@ def create_animation(map_graph, agent_positions_history, total_steps, algorithm_
     
     # 创建agent标记（最上层）- 使用zorder确保在最上层
     agent_markers = []
-    colors = ['red', 'green', 'blue', 'orange', 'purple']
+    agent_labels = []
+    colors = ['red', 'green', 'blue', 'orange', 'purple', 'brown', 'pink', 'cyan', 'magenta', 'yellow']
+    
+    # 转换颜色名称为RGB元组，以便计算亮度
+    rgb_colors = [to_rgb(c) for c in colors]
+
     for i in range(len(agent_positions_history[0])):
-        marker, = ax.plot([], [], '^', markersize=20, color=colors[i % len(colors)],   # type: ignore
-                         markeredgecolor='black', linewidth=3, label=f'Agent {i}', zorder=10)
+        bg_color = rgb_colors[i % len(rgb_colors)]
+        text_color = get_text_color_for_bg(bg_color)
+
+        marker, = ax.plot([], [], '^', markersize=28, color=bg_color,
+                         markeredgecolor='black', linewidth=2, label=f'Agent {i}', zorder=10)
+        label = ax.text(0, 0, str(i), ha='center', va='center', color=text_color, fontsize=10, fontweight='bold', zorder=11)
         agent_markers.append(marker)
+        agent_labels.append(label)
     
     ax.legend(fontsize=12, labelspacing=1.5)  # type: ignore
     
     def animate(frame):
         if frame >= len(agent_positions_history):
-            return agent_markers
+            return (*agent_markers, *agent_labels)
         
         current_positions = agent_positions_history[frame]
         
@@ -199,6 +143,7 @@ def create_animation(map_graph, agent_positions_history, total_steps, algorithm_
                     # 在节点上
                     pos = node_positions[start_node]
                     agent_markers[i].set_data([pos[0]], [pos[1]])
+                    agent_labels[i].set_position((pos[0], pos[1]))
                 else:
                     # 在边上，插值位置
                     start_pos = node_positions[start_node]
@@ -206,21 +151,39 @@ def create_animation(map_graph, agent_positions_history, total_steps, algorithm_
                     current_x = start_pos[0] + progress * (end_pos[0] - start_pos[0])
                     current_y = start_pos[1] + progress * (end_pos[1] - start_pos[1])
                     agent_markers[i].set_data([current_x], [current_y])
+                    agent_labels[i].set_position((current_x, current_y))
         
-        return agent_markers
+        return (*agent_markers, *agent_labels)
     
-    # 创建动画 - 调整更新频率，让移动更快
-    anim = animation.FuncAnimation(fig, animate, frames=min(total_steps, len(agent_positions_history)), 
-                                 interval=300, blit=True, repeat=True)  # 减少interval到300ms
+    # 创建动画 - 移除blit=True以支持文本动画，调整interval让动画变慢
+    anim = animation.FuncAnimation(fig, animate, frames=min(total_frames, len(agent_positions_history)), 
+                                 interval=90, blit=False, repeat=True)
     
     # 保存动画
     folder_name = f"{algorithm_name}_results"
     os.makedirs(folder_name, exist_ok=True)
     animation_filename = os.path.join(folder_name, f"{algorithm_name}_animation_{map_name}.gif")
-    anim.save(animation_filename, writer='pillow', fps=3)  # 增加fps到3
-    # plt.show()
+    anim.save(animation_filename, writer='pillow', fps=12, dpi=80) # 添加dpi参数以解决quantization error
+    plt.close() # 关闭动画窗口
     
     print(f"Animation saved as '{animation_filename}'")
+
+
+def get_text_color_for_bg(bg_color_rgb):
+    """
+    根据背景色的亮度决定使用黑色或白色文本以获得最佳对比度。
+    Args:
+        bg_color_rgb (tuple): 背景色的RGB元组, e.g., (1, 0, 0) for red.
+    Returns:
+        str: 'white' or 'black'.
+    """
+    # 计算颜色的感知亮度 (perceived luminance)
+    # 公式: Y = 0.299*R + 0.587*G + 0.114*B
+    luminance = 0.299 * bg_color_rgb[0] + 0.587 * bg_color_rgb[1] + 0.114 * bg_color_rgb[2]
+    
+    # 如果亮度大于0.5，背景是亮的，使用黑色文字；否则使用白色文字。
+    return 'black' if luminance > 0.5 else 'white'
+
 
 def calculate_label_positions(map_graph, node_positions):
     """
@@ -442,6 +405,7 @@ def create_improved_layout(map_graph, max_iterations=200):
 def create_balanced_layout(map_graph, max_iterations=150):
     """
     创建平衡布局 - 兼顾美观和边权真实性
+    此版本会根据节点数量自动缩放，以避免拥挤
     
     Args:
         map_graph: 地图图结构
@@ -450,10 +414,14 @@ def create_balanced_layout(map_graph, max_iterations=150):
     Returns:
         dict: 节点ID到(x, y)坐标的映射
     """
+    num_nodes = len(map_graph.nodes)
+    
+    # 根据节点数定义缩放因子，节点越多，布局越扩展
+    scale_factor = 1.0 + num_nodes / 25.0
+
     # 初始化节点位置（圆周分布）
     node_positions = {}
-    num_nodes = len(map_graph.nodes)
-    radius = 4.5  # 适中的半径
+    radius = 3.0 * scale_factor
     
     # 计算每个节点的度数，度数大的节点优先分配更好的位置
     node_degrees = {}
@@ -490,7 +458,7 @@ def create_balanced_layout(map_graph, max_iterations=150):
     
     # 力导向布局迭代 - 平衡美观和真实性
     for iteration in range(max_iterations):
-        forces = {node: np.array([0.0, 0.0]) for node in map_graph.nodes}
+        forces: Dict[int, List[float]] = {node: [0.0, 0.0] for node in map_graph.nodes}
         
         # 弹簧力（基于边权）- 权重越大，目标距离越远，但范围适中
         for node in map_graph.nodes:
@@ -505,9 +473,9 @@ def create_balanced_layout(map_graph, max_iterations=150):
                     # 目标距离基于权重，但范围更合理
                     if weight_range > 0:
                         normalized_weight = (weight - min_weight) / weight_range
-                        target_distance = 2.5 + normalized_weight * 2.5  # 2.5到5.0之间
+                        target_distance = (1.5 * scale_factor) + normalized_weight * (1.5 * scale_factor)
                     else:
-                        target_distance = 3.5
+                        target_distance = 2.5 * scale_factor
                     
                     # 计算弹簧力
                     if current_distance > 0:
@@ -515,8 +483,10 @@ def create_balanced_layout(map_graph, max_iterations=150):
                         force_direction = (pos2 - pos1) / current_distance
                         force = force_magnitude * force_direction
                         
-                        forces[node] += force
-                        forces[neighbor] -= force
+                        forces[node][0] += force[0]
+                        forces[node][1] += force[1]
+                        forces[neighbor][0] -= force[0]
+                        forces[neighbor][1] -= force[1]
         
         # 排斥力（防止节点重叠）
         for i, node1 in enumerate(map_graph.nodes):
@@ -525,28 +495,33 @@ def create_balanced_layout(map_graph, max_iterations=150):
                 pos2 = np.array(node_positions[node2])
                 
                 distance = np.linalg.norm(pos1 - pos2)
-                if distance > 0 and distance < 2.2:  # 如果太近
+                # 调整排斥力距离阈值
+                if distance > 0 and distance < (1.8 * scale_factor):
                     force_magnitude = 1.5 / (distance + 0.1)
                     force_direction = (pos1 - pos2) / distance
                     force = force_magnitude * force_direction
                     
-                    forces[node1] += force
-                    forces[node2] -= force
+                    forces[node1][0] += force[0]
+                    forces[node1][1] += force[1]
+                    forces[node2][0] -= force[0]
+                    forces[node2][1] -= force[1]
         
         # 向心力（保持节点在合理范围内）
         center = np.array([0.0, 0.0])
         for node in map_graph.nodes:
             pos = np.array(node_positions[node])
             distance_to_center = np.linalg.norm(pos - center)
-            if distance_to_center > 6.5:  # 如果太远
-                force_magnitude = (distance_to_center - 6.5) * 0.1
+            # 调整向心力距离阈值
+            if distance_to_center > (4.0 * scale_factor):
+                force_magnitude = (distance_to_center - (4.0 * scale_factor)) * 0.1
                 force_direction = (center - pos) / distance_to_center
                 force = force_magnitude * force_direction
-                forces[node] += force
+                forces[node][0] += force[0]
+                forces[node][1] += force[1]
         
         # 更新节点位置
         for node in map_graph.nodes:
-            force = forces[node]
+            force = np.array(forces[node])
             # 限制力的大小
             force_magnitude = np.linalg.norm(force)
             if force_magnitude > 0.25:

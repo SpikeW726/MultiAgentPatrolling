@@ -2,7 +2,7 @@ import os
 import random
 import matplotlib.pyplot as plt
 from utils.graph_utils import Graph
-from utils.visualize_utils import evaluate_and_visualize
+from utils.visualize_utils import plot_idleness_charts, create_animation
 
 class BBLA_agent:
     def __init__(self, agent_id, init_node, map:Graph, gamma=0.9, epsilon=0.1):
@@ -41,11 +41,7 @@ class BBLA_agent:
         
         # adjust the discounted factor according to edge length
         edge_weight = self.map.get_edge_length(state[0], action)
-        # for n, w in self.map.adj_list[state[0]]:
-        #     if n == action:
-        #         edge_weight = w
-        #         break
-        
+
         if not edge_weight == 0:
             discount_factor = self.gamma ** edge_weight
         else:
@@ -59,10 +55,10 @@ class BBLA_agent:
         new_Q = last_Q + alpha * (reward + discount_factor * max_next_Q - last_Q)
         self.Q_table[(state, action)] = new_Q
     
-    def select_action(self, state):
+    def select_action(self, state, evaluation_mode=False):
         neighbors = [n for n, _ in self.map.adj_list[self.position]]
-        # ε-greedy
-        if random.random() < self.epsilon:
+        # In evaluation mode, always be greedy. Otherwise, use ε-greedy.
+        if not evaluation_mode and random.random() < self.epsilon:
             return random.choice(neighbors)
         else:
             q_values = [self.Q_table.get((state, n), 0) for n in neighbors]
@@ -71,7 +67,7 @@ class BBLA_agent:
             best_actions = [n for n, q in zip(neighbors, q_values) if q == max_q]
             return random.choice(best_actions)
 
-    def step(self, node_Idleness):
+    def step(self, node_Idleness, evaluation_mode=False):
         '''
         if reach a node after this time-step, return the node it reach
         otherwise, return None
@@ -79,13 +75,10 @@ class BBLA_agent:
         if not self.on_edge:
             # exactly on the node, choose next target node
             state = self.get_state(node_Idleness)
-            action = self.select_action(state)
+            action = self.select_action(state, evaluation_mode)
 
             edge_weight = self.map.get_edge_length(self.position, action)
-            # for n, w in self.map.adj_list[self.position]:
-            #     if n == action:
-            #         edge_weight = w
-            #         break
+
             self.on_edge = True
             self.edge_time_left = int(edge_weight) if edge_weight is not None else 0
             self.target_node = action
@@ -108,6 +101,7 @@ class BBLA_agent:
 def main():
     map_path1 = 'graphs/simple_8nodes.json'
     map_path2 = 'graphs/medium_12nodes.json'
+    map_path3 = 'graphs/essay_MapB.json'
     map_path = map_path2
     map_name = os.path.splitext(os.path.basename(map_path))[0]
     
@@ -125,7 +119,7 @@ def main():
     episode_idleness = []
     
     # train
-    for i in range(episode_num):
+    for j in range(episode_num):
         # re-initialize positions of the agents in every episode
         init_positions = random.sample(train_map.nodes, agent_num)
         for i, agent in enumerate(BBLAagents):
@@ -171,8 +165,8 @@ def main():
         normalized_avg_idleness = episode_avg_idleness * (agent_num / len(train_map.nodes))
         episode_idleness.append(normalized_avg_idleness)
         
-        if (i + 1) % 100 == 0:
-            print(f"Episode {i+1}/{episode_num}, Normalized Avg Idleness: {normalized_avg_idleness:.2f}")
+        if (j + 1) % 100 == 0:
+            print(f"Episode {j+1}/{episode_num}, Normalized Avg Idleness: {normalized_avg_idleness:.2f}")
     
     # traning plot
     plt.figure(figsize=(10, 6))
@@ -191,9 +185,80 @@ def main():
     print(f"Training completed! Final normalized average idleness: {episode_idleness[-1]:.2f}")
     print(f"Training curve saved as '{file_name}'")
     
+    
     # evaluation and visualization
-    print("\nStarting evaluation and visualization...")
-    evaluate_and_visualize(BBLAagents, train_map, algorithm_name="BBLA", map_name=map_name, evaluation_steps=600)
+    print("\nStarting evaluation...")
+    evaluation_steps = 600
+    
+    # Reset agents and environment for evaluation
+    init_positions = random.sample(train_map.nodes, agent_num)
+    for i, agent in enumerate(BBLAagents):
+        agent.position = init_positions[i]
+        agent.last_state = (0,0,0,0)
+        agent.on_edge = False
+        agent.edge_time_left = 0
+        agent.target_node = int()
+        
+    node_Idleness = {n: 0 for n in train_map.nodes}
+
+    # Data recorders for visualization
+    graph_idleness_history = []
+    avg_idleness_history = []
+    worst_idleness_history = []
+    agent_positions_history = []
+    sub_steps_per_step = 3
+    
+    for step in range(evaluation_steps):
+        for n in node_Idleness:
+            node_Idleness[n] += 1
+        
+        normalization = agent_num / len(train_map.nodes)
+        current_graph_idleness = sum(node_Idleness.values()) * normalization / len(node_Idleness)
+        graph_idleness_history.append(current_graph_idleness)
+        current_avg_idleness = sum(graph_idleness_history) / (step + 1)
+        avg_idleness_history.append(current_avg_idleness)
+        current_worst_idleness = max(node_Idleness.values()) * normalization
+        worst_idleness_history.append(current_worst_idleness)
+        
+        # Record agent positions for animation
+        for sub_step in range(sub_steps_per_step):
+            current_positions = {}
+            for agent in BBLAagents:
+                if agent.on_edge:
+                    edge_weight = agent.map.get_edge_length(agent.last_state[0], agent.target_node)
+                    if edge_weight is not None and edge_weight > 0:
+                        step_progress = (edge_weight - agent.edge_time_left) / edge_weight
+                        sub_progress = sub_step / sub_steps_per_step
+                        total_progress = min(1.0, step_progress + sub_progress / edge_weight)
+                    else:
+                        total_progress = 1.0
+                    current_positions[agent.agent_id] = (agent.last_state[0], agent.target_node, total_progress)
+                else:
+                    current_positions[agent.agent_id] = (agent.position, agent.position, 1.0)
+            agent_positions_history.append(current_positions)
+
+        for agent in BBLAagents:
+            result = agent.step(node_Idleness, evaluation_mode=True)
+            if result is not None:
+                reward = node_Idleness[result]
+                node_Idleness[result] = 0
+                
+                current_state = agent.get_state(node_Idleness)
+                next_action = agent.select_action(current_state)
+                edge_weight = agent.map.get_edge_length(agent.position, next_action)
+                
+                agent.on_edge = True
+                agent.edge_time_left = int(edge_weight) if edge_weight is not None else 0
+                agent.target_node = next_action
+                agent.last_state = current_state
+                agent.last_action = next_action
+
+    print(f"Evaluation completed! Final average idleness: {avg_idleness_history[-1]:.2f}")
+    
+    # --- Call Visualization Functions ---
+    print("\nGenerating visualizations...")
+    plot_idleness_charts(avg_idleness_history, worst_idleness_history, "BBLA", map_name)
+    create_animation(train_map, agent_positions_history, len(agent_positions_history), "BBLA", map_name)
 
 if __name__ == "__main__":
     main()
