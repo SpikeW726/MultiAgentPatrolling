@@ -1,6 +1,8 @@
+import os
 import random
 import matplotlib.pyplot as plt
 from utils.graph_utils import Graph
+from utils.visualize_utils import evaluate_and_visualize
 
 class BBLA_agent:
     def __init__(self, agent_id, init_node, map:Graph, gamma=0.9, epsilon=0.1):
@@ -104,15 +106,20 @@ class BBLA_agent:
                 return None
 
 def main():
-    Map_1 = Graph('graphs/simple_8nodes.json')
+    map_path1 = 'graphs/simple_8nodes.json'
+    map_path2 = 'graphs/medium_12nodes.json'
+    map_path = map_path2
+    map_name = os.path.splitext(os.path.basename(map_path))[0]
+    
+    train_map = Graph(map_path)
     agent_num = 3
     episode_num = 10000  
     episode_len = 600 # quantity of time-step in one episode
     # initialize positions of the agents randomly
-    init_positions = random.sample(Map_1.nodes, agent_num)
-    BBLAagents = [BBLA_agent(i, pos, Map_1) for i, pos in enumerate(init_positions)]
+    init_positions = random.sample(train_map.nodes, agent_num)
+    BBLAagents = [BBLA_agent(i, pos, train_map) for i, pos in enumerate(init_positions)]
     # initialize node idleness
-    node_Idleness = {n: 0 for n in Map_1.nodes}
+    node_Idleness = {n: 0 for n in train_map.nodes}
     
     # record the normalized average idleness of each episode
     episode_idleness = []
@@ -120,14 +127,14 @@ def main():
     # train
     for i in range(episode_num):
         # re-initialize positions of the agents in every episode
-        init_positions = random.sample(Map_1.nodes, agent_num)
+        init_positions = random.sample(train_map.nodes, agent_num)
         for i, agent in enumerate(BBLAagents):
             agent.position = init_positions[i]
             agent.last_state = (0,0,0,0)
             agent.on_edge = False
             agent.edge_time_left = 0
             agent.target_node = int()
-        node_Idleness = {n: 0 for n in Map_1.nodes}
+        node_Idleness = {n: 0 for n in train_map.nodes}
         total_Idleness = 0
         
         for step in range(episode_len):
@@ -161,7 +168,7 @@ def main():
         episode_avg_idleness = total_Idleness / episode_len
         
         # normalize
-        normalized_avg_idleness = episode_avg_idleness * (agent_num / len(Map_1.nodes))
+        normalized_avg_idleness = episode_avg_idleness * (agent_num / len(train_map.nodes))
         episode_idleness.append(normalized_avg_idleness)
         
         if (i + 1) % 100 == 0:
@@ -172,19 +179,21 @@ def main():
     plt.plot(range(1, episode_num + 1), episode_idleness, 'b-', linewidth=1)
     plt.xlabel('Episode')
     plt.ylabel('Normalized Average Idleness')
-    plt.title('BBLA Training Progress')
+    plt.title(f'BBLA Training Progress on {map_name}')
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig('BBLA_training_curve.png', dpi=300, bbox_inches='tight')
-    plt.show()
+    folder_name = f"BBLA_results"
+    os.makedirs(folder_name, exist_ok=True)
+    file_name = os.path.join(folder_name,f'BBLA_training_curve_{map_name}.png')
+    plt.savefig(file_name, dpi=300, bbox_inches='tight')
+    # plt.show()
     
     print(f"Training completed! Final normalized average idleness: {episode_idleness[-1]:.2f}")
-    print("Training curve saved as 'BBLA_training_curve.png'")
+    print(f"Training curve saved as '{file_name}'")
     
     # evaluation and visualization
     print("\nStarting evaluation and visualization...")
-    from visualization import evaluate_and_visualize
-    evaluate_and_visualize(BBLAagents, Map_1, algorithm_name="BBLA", evaluation_steps=600)
+    evaluate_and_visualize(BBLAagents, train_map, algorithm_name="BBLA", map_name=map_name, evaluation_steps=600)
 
 if __name__ == "__main__":
     main()
