@@ -2,6 +2,7 @@ from typing import Dict, List
 import os
 import random
 import matplotlib.pyplot as plt
+import pickle
 from utils.graph_utils import Graph
 from utils.visualize_utils import plot_idleness_charts, create_animation
 
@@ -60,13 +61,13 @@ class GBLA_agent:
         next_neighbors = [n for n, _ in self.map.adj_list[action]]
         next_Qs = [self.Q_table.get((next_state, n), 0) for n in next_neighbors]
         max_next_Q = max(next_Qs) if next_Qs else 0
-        # update Q value
+        # update Q-table
         new_Q = last_Q + alpha * (reward + discount_factor * max_next_Q - last_Q)
         self.Q_table[(state, action)] = new_Q
     
     def select_action(self, state, evaluation_mode=False):
         neighbors = [n for n, _ in self.map.adj_list[self.position]]
-        # In evaluation mode, always be greedy. Otherwise, use ε-greedy.
+        # in evaluation mode, always be greedy. Otherwise, use ε-greedy.
         if not evaluation_mode and random.random() < self.epsilon:
             return random.choice(neighbors)
         else:
@@ -110,97 +111,124 @@ class GBLA_agent:
             return None
 
 def main():
+    # set QUICK_PREVIEW as True for a quick visualization
+    QUICK_PREVIEW = True
+
     map_path1 = 'graphs/simple_8nodes.json'
     map_path2 = 'graphs/medium_12nodes.json'
     map_path3 = 'graphs/essay_MapB.json'
     map_path = map_path3
     map_name = os.path.splitext(os.path.basename(map_path))[0]
-    
-    train_map = Graph(map_path)
-    agent_num = 10
-    episode_num = 10000  
-    episode_len = 600 # quantity of time-step in one episode
-    # initialize positions of the agents randomly
-    init_positions = random.sample(train_map.nodes, agent_num)
-    GBLAagents = [GBLA_agent(i, pos, train_map) for i, pos in enumerate(init_positions)]
-    # initialize node idleness
-    node_Idleness = {n: 0 for n in train_map.nodes}
-    node_is_target = {n: False for n in train_map.nodes}
-    
-    # record the normalized average idleness of each episode
-    episode_idleness = []
-    
-    # train
-    for j in range(episode_num):
-        # re-initialize positions of the agents in every episode
-        init_positions = random.sample(train_map.nodes, agent_num)
-        for i, agent in enumerate(GBLAagents):
-            agent.position = init_positions[i]
-            agent.last_state = (0,0,0,0)
-            agent.on_edge = False
-            agent.edge_time_left = 0
-            agent.target_node = int()
-        node_Idleness = {n: 0 for n in train_map.nodes}
-        node_is_target = {n: False for n in train_map.nodes}
-        total_Idleness = 0
-        
-        for step in range(episode_len):
-            for n in node_Idleness:
-                node_Idleness[n] += 1
-            for agent in GBLAagents:
-                result = agent.step(node_Idleness, node_is_target)
-                if result is not None:
-                    # reach a node
-                    reward = node_Idleness[result]
-                    node_Idleness[result] = 0
-                    node_is_target[result] = False
-                    current_state = agent.get_state(node_Idleness, node_is_target)
-                    agent.update_Q(agent.last_state, agent.last_action, reward, current_state)
-                    
-                    # choose target-node and move onto the edge immediately
-                    next_action = agent.select_action(current_state)
-                    edge_weight = agent.map.get_edge_length(agent.position, next_action)
-                    
-                    agent.on_edge = True
-                    agent.edge_time_left = int(edge_weight) if edge_weight is not None else 0
-                    agent.target_node = next_action
-                    node_is_target[next_action] = True
-                    
-                    agent.last_state = current_state
-                    agent.last_action = next_action
-
-            # calculate the Instantaneous Graph Idleness of current time-step
-            current_graph_idleness = sum(node_Idleness.values()) / len(node_Idleness)
-            total_Idleness += current_graph_idleness
-        
-        # calculate the Average Idleness of current episode
-        episode_avg_idleness = total_Idleness / episode_len
-        
-        # normalize
-        normalized_avg_idleness = episode_avg_idleness * (agent_num / len(train_map.nodes))
-        episode_idleness.append(normalized_avg_idleness)
-        
-        if (j + 1) % 100 == 0:
-            print(f"Episode {j+1}/{episode_num}, Normalized Avg Idleness: {normalized_avg_idleness:.2f}")
-
-    # traning plot
-    plt.figure(figsize=(10, 6))
-    plt.plot(range(1, episode_num + 1), episode_idleness, 'b-', linewidth=1)
-    plt.xlabel('Episode')
-    plt.ylabel('Normalized Average Idleness')
-    plt.title(f'GBLA Training Progress on {map_name}')
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
     folder_name = f"GBLA_results"
     os.makedirs(folder_name, exist_ok=True)
-    file_name = os.path.join(folder_name,f'GBLA_training_curve_{map_name}.png')
-    plt.savefig(file_name, dpi=300, bbox_inches='tight')
-    # plt.show()
+    model_filename = os.path.join(folder_name, f'GBLA_agents_{map_name}.pkl')
     
-    print(f"Training completed! Final normalized average idleness: {episode_idleness[-1]:.2f}")
-    print(f"Training curve saved as '{file_name}'")
-    
+    train_map = Graph(map_path)
+    if map_name == 'essay_MapB':
+        agent_num = 10
+    elif map_name == 'medium_12nodes' or 'simple_8nodes':
+        agent_num = 3
+    else:
+        agent_num = 2
 
+    episode_num = 10000  
+    episode_len = 600 # quantity of time-step in one episode
+
+    GBLAagents = None
+    # try to load pre-trained model
+    if os.path.exists(model_filename):
+        print(f"Loading pre-trained model from {model_filename}...")
+        with open(model_filename, 'rb') as f:
+            GBLAagents = pickle.load(f)
+
+        if len(GBLAagents) != agent_num:
+            print(f"Warning: Model agent count ({len(GBLAagents)}) mismatches current setting ({agent_num}). Retraining...")
+            GBLAagents = None
+            
+    if GBLAagents is None:
+        print("No pre-trained model found or agent count mismatch. Starting new training...")
+        # initialize positions of the agents randomly
+        init_positions = random.sample(train_map.nodes, agent_num)
+        GBLAagents = [GBLA_agent(i, pos, train_map) for i, pos in enumerate(init_positions)]
+        # initialize node idleness
+        node_Idleness = {n: 0 for n in train_map.nodes}
+        node_is_target = {n: False for n in train_map.nodes}
+        
+        # record the normalized average idleness of each episode
+        episode_idleness = []
+        
+        # train
+        for j in range(episode_num):
+            # re-initialize positions of the agents in every episode
+            init_positions = random.sample(train_map.nodes, agent_num)
+            for i, agent in enumerate(GBLAagents):
+                agent.position = init_positions[i]
+                agent.last_state = (0,0,0,0,())
+                agent.on_edge = False
+                agent.edge_time_left = 0
+                agent.target_node = int()
+            node_Idleness = {n: 0 for n in train_map.nodes}
+            node_is_target = {n: False for n in train_map.nodes}
+            total_Idleness = 0
+            
+            for step in range(episode_len):
+                for n in node_Idleness:
+                    node_Idleness[n] += 1
+                for agent in GBLAagents:
+                    result = agent.step(node_Idleness, node_is_target)
+                    if result is not None:
+                        # reach a node
+                        reward = node_Idleness[result]
+                        node_Idleness[result] = 0
+                        node_is_target[result] = False
+                        current_state = agent.get_state(node_Idleness, node_is_target)
+                        agent.update_Q(agent.last_state, agent.last_action, reward, current_state)
+                        
+                        # choose target-node and move onto the edge immediately
+                        next_action = agent.select_action(current_state)
+                        edge_weight = agent.map.get_edge_length(agent.position, next_action)
+                        
+                        agent.on_edge = True
+                        agent.edge_time_left = int(edge_weight) if edge_weight is not None else 0
+                        agent.target_node = next_action
+                        node_is_target[next_action] = True
+                        
+                        agent.last_state = current_state
+                        agent.last_action = next_action
+
+                # calculate the Instantaneous Graph Idleness of current time-step
+                current_graph_idleness = sum(node_Idleness.values()) / len(node_Idleness)
+                total_Idleness += current_graph_idleness
+            
+            # calculate the Average Idleness of current episode
+            episode_avg_idleness = total_Idleness / episode_len
+            
+            # normalize
+            normalized_avg_idleness = episode_avg_idleness * (agent_num / len(train_map.nodes))
+            episode_idleness.append(normalized_avg_idleness)
+            
+            if (j + 1) % 100 == 0:
+                print(f"Episode {j+1}/{episode_num}, Normalized Avg Idleness: {normalized_avg_idleness:.2f}")
+
+        # traning plot
+        plt.figure(figsize=(10, 6))
+        plt.plot(range(1, episode_num + 1), episode_idleness, 'b-', linewidth=1)
+        plt.xlabel('Episode')
+        plt.ylabel('Normalized Average Idleness')
+        plt.title(f'GBLA Training Progress on {map_name}')
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        file_name = os.path.join(folder_name,f'GBLA_training_curve_{map_name}.png')
+        plt.savefig(file_name, dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        print(f"Training completed! Final normalized average idleness: {episode_idleness[-1]:.2f}")
+        print(f"Training curve saved as '{file_name}'")
+
+        with open(model_filename, 'wb') as f:
+            pickle.dump(GBLAagents, f)
+        print(f"Trained agents saved to {model_filename}")
+    
     # evaluation and visualization
     print("\nStarting evaluation...")
     evaluation_steps = 600
@@ -257,7 +285,6 @@ def main():
         for agent in GBLAagents:
             result = agent.step(node_Idleness, node_is_target, evaluation_mode=True)
             if result is not None:
-                reward = node_Idleness[result]
                 node_Idleness[result] = 0
                 if result in node_is_target:
                     node_is_target[result] = False
@@ -277,7 +304,14 @@ def main():
     
     print("\nGenerating visualizations...")
     plot_idleness_charts(avg_idleness_history, worst_idleness_history, "GBLA", map_name)
-    create_animation(train_map, agent_positions_history, len(agent_positions_history), "GBLA", map_name)
+    
+    total_animation_frames = len(agent_positions_history)
+    frames_to_render = total_animation_frames
+    if QUICK_PREVIEW:
+        frames_to_render = min(450, total_animation_frames) # only render the first 150 time-steps(450 frames)
+        print(f"\nQUICK PREVIEW mode is ON. Rendering only {frames_to_render} frames for the animation.")
+        
+    create_animation(train_map, agent_positions_history, frames_to_render, "GBLA", map_name)
 
 if __name__ == "__main__":
     main()

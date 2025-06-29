@@ -58,17 +58,30 @@ def create_animation(map_graph, agent_positions_history, total_frames, algorithm
     print("Starting animation...")
     
     num_nodes = len(map_graph.nodes)
-    # Scale figure size based on number of nodes to prevent crowding
+    # 移除动态画布缩放，使用固定的、合理的尺寸来避免内存溢出
     figure_scale_factor = 1.0 + num_nodes / 30.0
 
+    # --- 新增: 动态视觉元素缩放 ---
+    # 使用12个节点的图作为视觉基准
+    baseline_nodes = 12.0
+    # 为标记点和字体计算缩放因子
+    # 缩放是非线性的(sqrt)，以避免在大型图中元素过小
+    # 0.6的下限可防止元素变得难以辨认
+    visual_scale_factor = max(0.6, np.sqrt(baseline_nodes / num_nodes)) if num_nodes > 0 else 1.0
+
+    # 计算动态大小
+    node_markersize = 35 * visual_scale_factor
+    node_fontsize = 16 * visual_scale_factor
+    agent_markersize = 28 * visual_scale_factor
+    agent_fontsize = 10 * visual_scale_factor
+    edge_label_fontsize = 10 * visual_scale_factor
+
     # 创建图形
-    fig, ax = plt.subplots(figsize=(10 * figure_scale_factor, 8 * figure_scale_factor))
+    fig, ax = plt.subplots(figsize=(12 * figure_scale_factor, 10 * figure_scale_factor))
+    # fig, ax = plt.subplots(figsize=(12, 10)) # 使用固定的画布尺寸
     
     # 绘制地图 - 使用 networkx 的专业布局算法
     node_positions = create_nx_layout(map_graph)
-    # node_positions = create_balanced_layout(map_graph) # 注释掉旧的布局函数
-    # node_positions = create_circular_layout(map_graph)
-    # node_positions = create_improved_layout(map_graph)
     
     # 绘制边（先绘制，在底层）
     for node in map_graph.nodes:
@@ -80,8 +93,8 @@ def create_animation(map_graph, agent_positions_history, total_frames, algorithm
     
     # 绘制节点（中间层）
     for node, pos in node_positions.items():
-        ax.plot(pos[0], pos[1], 'o', markersize=35, color='skyblue', markeredgecolor='black', linewidth=2)  # type: ignore
-        ax.text(pos[0], pos[1], str(node), ha='center', va='center', fontsize=16, fontweight='bold')  # type: ignore
+        ax.plot(pos[0], pos[1], 'o', markersize=node_markersize, color='skyblue', markeredgecolor='black', linewidth=2)  # type: ignore
+        ax.text(pos[0], pos[1], str(node), ha='center', va='center', fontsize=node_fontsize, fontweight='bold')  # type: ignore
     
     # 绘制边权标签（中间层）- 智能位置调整
     label_positions = calculate_label_positions(map_graph, node_positions)
@@ -89,7 +102,7 @@ def create_animation(map_graph, agent_positions_history, total_frames, algorithm
         weight = map_graph.get_edge_length(node, neighbor)
         if weight is not None:
             ax.text(label_x, label_y, str(weight), ha='center', va='center',   # type: ignore
-                   fontsize=10, fontweight='normal', bbox=dict(boxstyle="round,pad=0.3", 
+                   fontsize=edge_label_fontsize, fontweight='normal', bbox=dict(boxstyle="round,pad=0.3", 
                    facecolor='yellow', alpha=0.8, edgecolor='black', linewidth=0.5))
     
     # 设置图形范围 - 根据实际节点位置动态调整
@@ -123,9 +136,9 @@ def create_animation(map_graph, agent_positions_history, total_frames, algorithm
         bg_color = rgb_colors[i % len(rgb_colors)]
         text_color = get_text_color_for_bg(bg_color)
 
-        marker, = ax.plot([], [], '^', markersize=28, color=bg_color,
+        marker, = ax.plot([], [], '^', markersize=agent_markersize, color=bg_color,
                          markeredgecolor='black', linewidth=2, label=f'Agent {i}', zorder=10)
-        label = ax.text(0, 0, str(i), ha='center', va='center', color=text_color, fontsize=10, fontweight='bold', zorder=11)
+        label = ax.text(0, 0, str(i), ha='center', va='center', color=text_color, fontsize=agent_fontsize, fontweight='bold', zorder=11)
         agent_markers.append(marker)
         agent_labels.append(label)
     
@@ -158,12 +171,12 @@ def create_animation(map_graph, agent_positions_history, total_frames, algorithm
     # 创建动画 - 移除blit=True以支持文本动画，调整interval让动画变慢
     anim = animation.FuncAnimation(fig, animate, frames=min(total_frames, len(agent_positions_history)), 
                                  interval=90, blit=False, repeat=True)
-    
+
     # 保存动画
     folder_name = f"{algorithm_name}_results"
     os.makedirs(folder_name, exist_ok=True)
     animation_filename = os.path.join(folder_name, f"{algorithm_name}_animation_{map_name}.gif")
-    anim.save(animation_filename, writer='pillow', fps=12, dpi=80) # 添加dpi参数以解决quantization error
+    anim.save(animation_filename, writer='pillow', fps=12, dpi=120) 
     plt.close() # 关闭动画窗口
     
     print(f"Animation saved as '{animation_filename}'")
@@ -230,306 +243,3 @@ def calculate_label_positions(map_graph, node_positions):
         
     return label_positions
 
-def create_circular_layout(map_graph):
-    """
-    创建圆形布局 - 节点排在外围一圈，减少边穿过节点
-    
-    Args:
-        map_graph: 地图图结构
-    
-    Returns:
-        dict: 节点ID到(x, y)坐标的映射
-    """
-    # 初始化节点位置（圆周分布）
-    node_positions = {}
-    num_nodes = len(map_graph.nodes)
-    radius = 5.0  # 增大半径，让节点分布更分散
-    
-    # 计算每个节点的度数，度数大的节点优先分配更好的位置
-    node_degrees = {}
-    for node in map_graph.nodes:
-        node_degrees[node] = len(map_graph.adj_list[node])
-    
-    # 按度数排序，度数大的节点优先选择位置
-    sorted_nodes = sorted(map_graph.nodes, key=lambda x: node_degrees[x], reverse=True)
-    
-    # 分配位置
-    for i, node in enumerate(sorted_nodes):
-        angle = 2 * np.pi * i / num_nodes
-        # 添加一些随机偏移，避免完全对称
-        angle_offset = (np.random.random() - 0.5) * 0.1
-        radius_offset = (np.random.random() - 0.5) * 0.3
-        node_positions[node] = (
-            (radius + radius_offset) * np.cos(angle + angle_offset),
-            (radius + radius_offset) * np.sin(angle + angle_offset)
-        )
-    
-    # 简单的力导向优化，主要优化边不穿过节点
-    for iteration in range(50):
-        forces = {node: np.array([0.0, 0.0]) for node in map_graph.nodes}
-        
-        # 排斥力（防止节点重叠）
-        for i, node1 in enumerate(map_graph.nodes):
-            for node2 in list(map_graph.nodes)[i+1:]:
-                pos1 = np.array(node_positions[node1])
-                pos2 = np.array(node_positions[node2])
-                
-                distance = np.linalg.norm(pos1 - pos2)
-                if distance > 0 and distance < 2.0:  # 如果太近
-                    force_magnitude = 2.0 / (distance + 0.1)
-                    force_direction = (pos1 - pos2) / distance
-                    force = force_magnitude * force_direction
-                    
-                    forces[node1] += force
-                    forces[node2] -= force
-        
-        # 向心力（保持节点在合理范围内）
-        center = np.array([0.0, 0.0])
-        for node in map_graph.nodes:
-            pos = np.array(node_positions[node])
-            distance_to_center = np.linalg.norm(pos - center)
-            if distance_to_center > 7.0:  # 如果太远
-                force_magnitude = (distance_to_center - 7.0) * 0.1
-                force_direction = (center - pos) / distance_to_center
-                force = force_magnitude * force_direction
-                forces[node] += force
-        
-        # 更新节点位置
-        for node in map_graph.nodes:
-            force = forces[node]
-            # 限制力的大小
-            force_magnitude = np.linalg.norm(force)
-            if force_magnitude > 0.2:
-                force = force * 0.2 / force_magnitude
-            
-            node_positions[node] = (
-                node_positions[node][0] + force[0],
-                node_positions[node][1] + force[1]
-            )
-    
-    return node_positions
-
-def create_improved_layout(map_graph, max_iterations=200):
-    """
-    创建改进的节点布局 - 基于边权的力导向布局
-    
-    Args:
-        map_graph: 地图图结构
-        max_iterations: 最大迭代次数
-    
-    Returns:
-        dict: 节点ID到(x, y)坐标的映射
-    """
-    # 初始化节点位置（随机分布）
-    node_positions = {}
-    for i, node in enumerate(map_graph.nodes):
-        angle = 2 * np.pi * i / len(map_graph.nodes)
-        radius = 3 + np.random.random() * 2  # 添加一些随机性
-        node_positions[node] = (radius * np.cos(angle), radius * np.sin(angle))
-    
-    # 计算所有边的权重范围
-    all_weights = []
-    for node in map_graph.nodes:
-        for neighbor, weight in map_graph.adj_list[node]:
-            if node < neighbor:  # 避免重复
-                all_weights.append(weight)
-    
-    if not all_weights:
-        return node_positions
-    
-    min_weight = min(all_weights)
-    max_weight = max(all_weights)
-    weight_range = max_weight - min_weight
-    
-    # 力导向布局迭代
-    for iteration in range(max_iterations):
-        # 计算每个节点受到的力
-        forces = {node: np.array([0.0, 0.0]) for node in map_graph.nodes}
-        
-        # 弹簧力（基于边权）
-        for node in map_graph.nodes:
-            for neighbor, weight in map_graph.adj_list[node]:
-                if node < neighbor:  # 避免重复计算
-                    pos1 = np.array(node_positions[node])
-                    pos2 = np.array(node_positions[neighbor])
-                    
-                    # 计算当前距离
-                    current_distance = np.linalg.norm(pos1 - pos2)
-                    
-                    # 目标距离基于权重（权重越大，目标距离越远）
-                    if weight_range > 0:
-                        normalized_weight = (weight - min_weight) / weight_range
-                        target_distance = 1.0 + normalized_weight * 3.0  # 1.0到4.0之间
-                    else:
-                        target_distance = 2.0
-                    
-                    # 计算弹簧力
-                    if current_distance > 0:
-                        force_magnitude = (current_distance - target_distance) * 0.1
-                        force_direction = (pos2 - pos1) / current_distance
-                        force = force_magnitude * force_direction
-                        
-                        forces[node] += force
-                        forces[neighbor] -= force
-        
-        # 排斥力（防止节点重叠）
-        for i, node1 in enumerate(map_graph.nodes):
-            for node2 in list(map_graph.nodes)[i+1:]:
-                pos1 = np.array(node_positions[node1])
-                pos2 = np.array(node_positions[node2])
-                
-                distance = np.linalg.norm(pos1 - pos2)
-                if distance > 0 and distance < 1.0:  # 如果太近
-                    force_magnitude = 0.5 / (distance + 0.1)
-                    force_direction = (pos1 - pos2) / distance
-                    force = force_magnitude * force_direction
-                    
-                    forces[node1] += force
-                    forces[node2] -= force
-        
-        # 更新节点位置
-        for node in map_graph.nodes:
-            force = forces[node]
-            # 限制力的大小
-            force_magnitude = np.linalg.norm(force)
-            if force_magnitude > 0.5:
-                force = force * 0.5 / force_magnitude
-            
-            node_positions[node] = (
-                node_positions[node][0] + force[0],
-                node_positions[node][1] + force[1]
-            )
-    
-    return node_positions
-
-def create_balanced_layout(map_graph, max_iterations=150):
-    """
-    创建平衡布局 - 兼顾美观和边权真实性
-    此版本会根据节点数量自动缩放，以避免拥挤
-    
-    Args:
-        map_graph: 地图图结构
-        max_iterations: 最大迭代次数
-    
-    Returns:
-        dict: 节点ID到(x, y)坐标的映射
-    """
-    num_nodes = len(map_graph.nodes)
-    
-    # 根据节点数定义缩放因子，节点越多，布局越扩展
-    scale_factor = 1.0 + num_nodes / 25.0
-
-    # 初始化节点位置（圆周分布）
-    node_positions = {}
-    radius = 3.0 * scale_factor
-    
-    # 计算每个节点的度数，度数大的节点优先分配更好的位置
-    node_degrees = {}
-    for node in map_graph.nodes:
-        node_degrees[node] = len(map_graph.adj_list[node])
-    
-    # 按度数排序，度数大的节点优先选择位置
-    sorted_nodes = sorted(map_graph.nodes, key=lambda x: node_degrees[x], reverse=True)
-    
-    # 分配位置
-    for i, node in enumerate(sorted_nodes):
-        angle = 2 * np.pi * i / num_nodes
-        # 添加一些随机偏移，避免完全对称
-        angle_offset = (np.random.random() - 0.5) * 0.15
-        radius_offset = (np.random.random() - 0.5) * 0.4
-        node_positions[node] = (
-            (radius + radius_offset) * np.cos(angle + angle_offset),
-            (radius + radius_offset) * np.sin(angle + angle_offset)
-        )
-    
-    # 计算所有边的权重范围
-    all_weights = []
-    for node in map_graph.nodes:
-        for neighbor, weight in map_graph.adj_list[node]:
-            if node < neighbor:  # 避免重复
-                all_weights.append(weight)
-    
-    if not all_weights:
-        return node_positions
-    
-    min_weight = min(all_weights)
-    max_weight = max(all_weights)
-    weight_range = max_weight - min_weight
-    
-    # 力导向布局迭代 - 平衡美观和真实性
-    for iteration in range(max_iterations):
-        forces: Dict[int, List[float]] = {node: [0.0, 0.0] for node in map_graph.nodes}
-        
-        # 弹簧力（基于边权）- 权重越大，目标距离越远，但范围适中
-        for node in map_graph.nodes:
-            for neighbor, weight in map_graph.adj_list[node]:
-                if node < neighbor:  # 避免重复计算
-                    pos1 = np.array(node_positions[node])
-                    pos2 = np.array(node_positions[neighbor])
-                    
-                    # 计算当前距离
-                    current_distance = np.linalg.norm(pos1 - pos2)
-                    
-                    # 目标距离基于权重，但范围更合理
-                    if weight_range > 0:
-                        normalized_weight = (weight - min_weight) / weight_range
-                        target_distance = (1.5 * scale_factor) + normalized_weight * (1.5 * scale_factor)
-                    else:
-                        target_distance = 2.5 * scale_factor
-                    
-                    # 计算弹簧力
-                    if current_distance > 0:
-                        force_magnitude = (current_distance - target_distance) * 0.08
-                        force_direction = (pos2 - pos1) / current_distance
-                        force = force_magnitude * force_direction
-                        
-                        forces[node][0] += force[0]
-                        forces[node][1] += force[1]
-                        forces[neighbor][0] -= force[0]
-                        forces[neighbor][1] -= force[1]
-        
-        # 排斥力（防止节点重叠）
-        for i, node1 in enumerate(map_graph.nodes):
-            for node2 in list(map_graph.nodes)[i+1:]:
-                pos1 = np.array(node_positions[node1])
-                pos2 = np.array(node_positions[node2])
-                
-                distance = np.linalg.norm(pos1 - pos2)
-                # 调整排斥力距离阈值
-                if distance > 0 and distance < (1.8 * scale_factor):
-                    force_magnitude = 1.5 / (distance + 0.1)
-                    force_direction = (pos1 - pos2) / distance
-                    force = force_magnitude * force_direction
-                    
-                    forces[node1][0] += force[0]
-                    forces[node1][1] += force[1]
-                    forces[node2][0] -= force[0]
-                    forces[node2][1] -= force[1]
-        
-        # 向心力（保持节点在合理范围内）
-        center = np.array([0.0, 0.0])
-        for node in map_graph.nodes:
-            pos = np.array(node_positions[node])
-            distance_to_center = np.linalg.norm(pos - center)
-            # 调整向心力距离阈值
-            if distance_to_center > (4.0 * scale_factor):
-                force_magnitude = (distance_to_center - (4.0 * scale_factor)) * 0.1
-                force_direction = (center - pos) / distance_to_center
-                force = force_magnitude * force_direction
-                forces[node][0] += force[0]
-                forces[node][1] += force[1]
-        
-        # 更新节点位置
-        for node in map_graph.nodes:
-            force = np.array(forces[node])
-            # 限制力的大小
-            force_magnitude = np.linalg.norm(force)
-            if force_magnitude > 0.25:
-                force = force * 0.25 / force_magnitude
-            
-            node_positions[node] = (
-                node_positions[node][0] + force[0],
-                node_positions[node][1] + force[1]
-            )
-    
-    return node_positions
